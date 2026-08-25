@@ -1,0 +1,56 @@
+name: Destroy All
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "输入 DELETE 确认清空所有实例/服务/镜像（不可恢复！）"
+        required: true
+        type: string
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    if: inputs.confirm == 'DELETE'
+    env:
+      UNIKRAFT_API_TOKEN: ${{ secrets.UNIKRAFT_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 unikraft CLI
+        run: |
+          VER=v0.4.2
+          curl -sL -o /tmp/u.tgz "https://github.com/unikraft-cloud/cli/releases/download/${VER}/unikraft-cli_0.4.2_linux_amd64.tar.gz"
+          tar xzf /tmp/u.tgz -C /tmp
+          sudo mv /tmp/unikraft /usr/local/bin/unikraft
+
+      - name: 清空全部资源
+        run: |
+          set -e
+          TOKEN="$UNIKRAFT_API_TOKEN"
+          ORG=$(printf '%s' "$TOKEN" | base64 -d | cut -d: -f1 | sed -e 's/^robot\$//' -e 's/\.users\.kraftcloud$//')
+          printf '%s' "$TOKEN" | unikraft login --token=- --organization "$ORG" >/dev/null
+
+          echo "== 删除实例 =="
+          unikraft instances list -o json 2>/dev/null | jq -r '.[].name' | sort -u | while read -r n; do
+            [ -n "$n" ] || continue
+            echo "  删除实例 $n"; unikraft instances delete "$n" --force || true
+          done
+          sleep 3
+
+          echo "== 删除服务 =="
+          unikraft services list -o json 2>/dev/null | jq -r '.[].name' | sort -u | while read -r n; do
+            [ -n "$n" ] || continue
+            echo "  删除服务 $n"; unikraft services delete "$n" || true
+          done
+
+          echo "== 删除镜像 =="
+          unikraft images list -o json 2>/dev/null | jq -r '.[].ref' | sort -u | while read -r r; do
+            [ -n "$r" ] || continue
+            echo "  删除镜像 $r"; unikraft images delete "$ORG/$(basename "$r")" || true
+          done
+
+          echo ""
+          echo "== 剩余检查 =="
+          unikraft instances list -o json 2>/dev/null | jq -r 'length' | xargs -I{} echo "剩余实例: {}"
+          unikraft services list -o json 2>/dev/null | jq -r 'length' | xargs -I{} echo "剩余服务: {}"
