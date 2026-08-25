@@ -23,11 +23,18 @@ login() {
 case "$PHASE" in
 prepare)
   # 1) 检测语言
-  KIND=""
-  if [ -f app/package.json ] || [ -f app/index.js ]; then KIND=node; fi
-  if [ -f app/main.py ] || [ -f app/requirements.txt ]; then KIND=python; fi
-  [ -n "$KIND" ] || { echo "app/ 里没找到 index.js(Node) 或 main.py(Python)"; exit 1; }
-  echo "语言: $KIND"
+  IS_NODE=0; IS_PY=0
+  if [ -f app/package.json ] || [ -f app/index.js ]; then IS_NODE=1; fi
+  if [ -f app/main.py ] || [ -f app/app.py ] || [ -f app/index.py ] || [ -f app/requirements.txt ]; then IS_PY=1; fi
+  if [ "$IS_NODE" = 1 ] && [ "$IS_PY" = 1 ]; then
+    echo "✗ app/ 里同时有 Node 和 Python 的标志文件，请只保留一种语言的代码"; exit 1
+  fi
+  KIND=""; [ "$IS_NODE" = 1 ] && KIND=node || KIND=python
+  [ -n "$KIND" ] || { echo "app/ 里没找到代码：Node 放 index.js(+package.json)，Python 放 main.py/app.py/index.py(+可选 requirements.txt)"; exit 1; }
+  PY_ENTRY=main.py
+  if [ -f app/app.py ]; then PY_ENTRY=app.py; fi
+  if [ -f app/index.py ]; then PY_ENTRY=index.py; fi
+  echo "语言: $KIND (入口: $([ "$KIND" = node ] && echo index.js || echo "$PY_ENTRY"))"
 
   # 2) 拉基础镜像层作为 rootfs
   if [ "$KIND" = node ]; then
@@ -64,7 +71,7 @@ prepare)
     if [ "$KIND" = node ]; then
       ENTRY='/bin/sh|-c|cd /app && exec node index.js'
     else
-      ENTRY='/bin/sh|-c|cd /app && exec python3 -u main.py'
+      ENTRY="/bin/sh|-c|cd /app && exec python3 -u $PY_ENTRY"
     fi
   fi
 
@@ -103,6 +110,10 @@ deploy)
     "$CLI" services create --name "$NAME-$R" --metro "$R" \
         --services "443:$APP_PORT/tls+http" --services "80:443/http+redirect" >/dev/null 2>&1 || true
     EXTRA_ENV=(-e "PORT=$APP_PORT")
+    # deploy 阶段是独立进程，KIND/PY_ENTRY 不存在，重新探测（与 prepare 的优先级一致）
+    for F in main.py app.py index.py; do
+      if [ -f "app/$F" ]; then EXTRA_ENV+=(-e "PY_ENTRY=$F"); break; fi
+    done
     if [ -f app/requirements.txt ]; then
       EXTRA_ENV+=(-e "PYTHONPATH=/app/pylibs:/app")
     fi

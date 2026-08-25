@@ -1,8 +1,6 @@
 name: Deploy to Unikraft Cloud
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       project_name:

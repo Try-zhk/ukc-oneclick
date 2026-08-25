@@ -17,9 +17,15 @@ HTML = open(os.path.join(HERE, 'index.html'), 'rb').read()
 SKIP_REQ = {'host', 'content-length', 'connection', 'accept-encoding'}
 SKIP_RESP = {'connection', 'transfer-encoding'}
 
-# 启动真正的应用（main.py）
-subprocess.Popen([sys.executable, '-u', 'main.py'],
-                 cwd=HERE, env={**os.environ, 'PORT': str(BACK)})
+# 启动真正的应用（入口：环境变量 PY_ENTRY 优先，否则按 main.py/app.py/index.py 探测）
+ENTRY = os.environ.get('PY_ENTRY', '')
+if ENTRY not in ('main.py', 'app.py', 'index.py'):
+    ENTRY = next((f for f in ('main.py', 'app.py', 'index.py')
+                  if os.path.exists(os.path.join(HERE, f))), 'main.py')
+# stdout/stderr 必须 DEVNULL：继承控制台 fd 在 unikernel 下可能卡死进程
+subprocess.Popen([sys.executable, '-u', ENTRY],
+                 cwd=HERE, env={**os.environ, 'PORT': str(BACK)},
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

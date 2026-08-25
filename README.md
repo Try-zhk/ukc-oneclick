@@ -1,6 +1,6 @@
 # Unikraft Cloud 一键部署
 
-把 `app/` 里的代码推上 GitHub，自动部署到 Unikraft Cloud（全球多地区）。改完 push 就更新。
+把 `app/` 里的代码推上 GitHub，然后**手动**在 Actions 页面点部署，发布到 Unikraft Cloud（全球多地区）。push 不会自动部署，什么时候发布由你决定。
 
 ## 首次配置（3 分钟）
 
@@ -14,7 +14,7 @@
    |---|---|---|
    | `DEPLOY_REGIONS` | `fra,sin` | 地区，逗号分隔 |
    | `PROJECT_NAME` | 仓库名 | 项目名（实例/服务/镜像都用它，同名=更新） |
-   | `MEMORY_MB` | `512` | 每实例内存 |
+   | `MEMORY_MB` | `1024` | 每实例内存 |
    | `APP_PORT` | `3000` | 应用监听端口 |
 
 ## 可用地区
@@ -29,14 +29,12 @@
 
 ## 怎么用
 
-### 方式一：全自动
-把代码放进 `app/`，push 到 `main` 分支 → 自动按默认变量部署。
-
-### 方式二：可视化表单（推荐）
-Actions → **Deploy to Unikraft Cloud** → Run workflow → 表单里填项目名、勾选地区、内存、端口 → 运行。手动触发时表单值优先于仓库变量。
+### 部署（手动触发）
+把代码放进 `app/`，push 到 `main` 分支（只是保存代码，不会部署）。
+然后：Actions → **Deploy to Unikraft Cloud** → Run workflow → 表单里填项目名、勾选地区、内存、端口 → 运行。
 
 ### 更新
-再 push 一次，或再跑一次 workflow。**同名即更新**：实例会先删后建（中断约几十秒）。
+改完代码 push，再跑一次 workflow。**同名即更新**：实例会先删后建（中断约几十秒）。
 
 ### 一键清空
 Actions → **Destroy All** → 输入 `DELETE` 确认 → 删掉账号下所有实例/服务/镜像，方便重新开始。
@@ -44,17 +42,18 @@ Actions → **Destroy All** → 输入 `DELETE` 确认 → 删掉账号下所有
 ## 放什么文件
 
 ```
-├── app/                  ← 你的应用代码放这里
-│   ├── index.js          Node 应用入口（或 main.py）
+├── app/                  ← 你的应用代码放这里（放之前清空示例文件）
+│   ├── index.js          Node 应用入口
 │   ├── package.json      npm 依赖（有就自动 npm install）
-│   └── main.py           Python 入口（或 requirements.txt）
+│   └── main.py           Python 入口（main.py / app.py / index.py 任选其一）
 ├── index.html            ← 可选！放了它，访问 / 就是这个页面，
 │                            其余路径照常到你的应用
 └── .github/workflows/    ← 部署流水线（不用动）
 ```
 
-- **Node.js**：有 `app/index.js` 或 `app/package.json` 就识别为 Node（Node 20）
-- **Python**：有 `app/main.py` 或 `app/requirements.txt` 就识别为 Python（3.12），依赖写进 `requirements.txt`
+- **Node.js**：有 `app/index.js` 或 `app/package.json` 就识别为 Node（Node 20），入口固定 `index.js`
+- **Python**：有 `main.py` / `app.py` / `index.py` 或 `requirements.txt` 就识别为 Python（3.12），入口按这个顺序探测；依赖写进 `requirements.txt`
+- 两种语言的标志文件别混放，脚本会报错提醒
 - 应用必须监听环境变量 `PORT` 给的端口（示例代码就是这么写的）
 
 ## 注意事项

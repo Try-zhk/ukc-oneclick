@@ -13,10 +13,12 @@ const BACK = PORT + 10;
 const HTML = fs.readFileSync(path.join(HERE, 'index.html'));
 
 // 启动真正的应用
+// stdio 必须用 'ignore'：部分应用会劫持/改写自己的 stdout，继承控制台 fd
+// 在 unikernel 环境下会把进程卡死（CPU 0%、无日志），别改回 inherit
 spawn(process.execPath, ['index.js'], {
   cwd: HERE,
   env: { ...process.env, PORT: String(BACK) },
-  stdio: 'inherit',
+  stdio: 'ignore',
 });
 
 function proxy(req, res) {
