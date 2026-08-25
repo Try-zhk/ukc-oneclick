@@ -7,6 +7,7 @@ import http.server
 import os
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 
@@ -17,15 +18,18 @@ HTML = open(os.path.join(HERE, 'index.html'), 'rb').read()
 SKIP_REQ = {'host', 'content-length', 'connection', 'accept-encoding'}
 SKIP_RESP = {'connection', 'transfer-encoding'}
 
-# 启动真正的应用（入口：环境变量 PY_ENTRY 优先，否则按 main.py/app.py/index.py 探测）
-ENTRY = os.environ.get('PY_ENTRY', '')
-if ENTRY not in ('main.py', 'app.py', 'index.py'):
-    ENTRY = next((f for f in ('main.py', 'app.py', 'index.py')
-                  if os.path.exists(os.path.join(HERE, f))), 'main.py')
-# stdout/stderr 必须 DEVNULL：继承控制台 fd 在 unikernel 下可能卡死进程
-subprocess.Popen([sys.executable, '-u', ENTRY],
-                 cwd=HERE, env={**os.environ, 'PORT': str(BACK)},
-                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# 启动真正的应用（main.py）；应用退出（崩溃/异常）就让 front 也退出，
+# 让平台感知到实例已失效并重启，而不是一直转发出 502。
+child = subprocess.Popen([sys.executable, '-u', 'main.py'],
+                         cwd=HERE, env={**os.environ, 'PORT': str(BACK)})
+
+
+def _watch_child():
+    code = child.wait()
+    os._exit(code if code else 1)
+
+
+threading.Thread(target=_watch_child, daemon=True).start()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

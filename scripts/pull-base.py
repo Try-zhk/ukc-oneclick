@@ -7,6 +7,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 ACCEPT = ",".join([
@@ -17,13 +19,21 @@ ACCEPT = ",".join([
 ])
 
 
-def fetch_json(url, token=None):
+def fetch_json(url, token=None, retries=4):
     req = urllib.request.Request(url)
     if token:
         req.add_header("Authorization", "Bearer " + token)
     req.add_header("Accept", ACCEPT)
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.loads(r.read())
+    for i in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read())
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            if i == retries - 1:
+                raise
+            wait = 2 ** i
+            print("  请求失败(%s)，%ds 后重试 (%d/%d)" % (e, wait, i + 1, retries), file=sys.stderr)
+            time.sleep(wait)
 
 
 def main():
@@ -55,14 +65,25 @@ def main():
         url = "https://registry-1.docker.io/v2/%s/blobs/%s" % (repo, layer["digest"])
         req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
         tmp = "/tmp/_ukc_layer_%d.bin" % i
-        with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
-            while True:
-                chunk = r.read(1 << 20)
-                if not chunk:
-                    break
-                f.write(chunk)
-        subprocess.run(["tar", "xzf", tmp, "-C", dest], check=False)
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                break
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+                if attempt == 3:
+                    raise
+                wait = 2 ** attempt
+                print("  layer %d 下载失败(%s)，%ds 后重试" % (i + 1, e, wait), file=sys.stderr)
+                time.sleep(wait)
+        result = subprocess.run(["tar", "xzf", tmp, "-C", dest])
         os.remove(tmp)
+        if result.returncode != 0:
+            sys.exit("layer %d 解压失败 (tar exit=%d)" % (i + 1, result.returncode))
         print("  layer %d/%d ok (%d B)" % (i + 1, len(layers), layer.get("size", 0)))
     print("rootfs 就绪: %s" % dest)
 

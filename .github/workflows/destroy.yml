@@ -8,6 +8,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
 jobs:
   destroy:
     runs-on: ubuntu-latest
@@ -31,17 +35,25 @@ jobs:
           ORG=$(printf '%s' "$TOKEN" | base64 -d | cut -d: -f1 | sed -e 's/^robot\$//' -e 's/\.users\.kraftcloud$//')
           printf '%s' "$TOKEN" | unikraft login --token=- --organization "$ORG" >/dev/null
 
+          # instances/services list 不带 --metro 只会返回 CLI 默认地区的资源，
+          # 逐个地区显式查询才能把所有地区的东西真正清空干净。
+          METROS="sin dal fra sfo was"
+
           echo "== 删除实例 =="
-          unikraft instances list -o json 2>/dev/null | jq -r '.[].name' | sort -u | while read -r n; do
-            [ -n "$n" ] || continue
-            echo "  删除实例 $n"; unikraft instances delete "$n" --force || true
+          for M in $METROS; do
+            unikraft instances list --metro "$M" -o json 2>/dev/null | jq -r '.[].name' | sort -u | while read -r n; do
+              [ -n "$n" ] || continue
+              echo "  [$M] 删除实例 $n"; unikraft instances delete "$n" --metro "$M" --force || true
+            done
           done
           sleep 3
 
           echo "== 删除服务 =="
-          unikraft services list -o json 2>/dev/null | jq -r '.[].name' | sort -u | while read -r n; do
-            [ -n "$n" ] || continue
-            echo "  删除服务 $n"; unikraft services delete "$n" || true
+          for M in $METROS; do
+            unikraft services list --metro "$M" -o json 2>/dev/null | jq -r '.[].name' | sort -u | while read -r n; do
+              [ -n "$n" ] || continue
+              echo "  [$M] 删除服务 $n"; unikraft services delete "$n" --metro "$M" || true
+            done
           done
 
           echo "== 删除镜像 =="
@@ -52,5 +64,7 @@ jobs:
 
           echo ""
           echo "== 剩余检查 =="
-          unikraft instances list -o json 2>/dev/null | jq -r 'length' | xargs -I{} echo "剩余实例: {}"
-          unikraft services list -o json 2>/dev/null | jq -r 'length' | xargs -I{} echo "剩余服务: {}"
+          for M in $METROS; do
+            n=$(unikraft instances list --metro "$M" -o json 2>/dev/null | jq -r 'length')
+            echo "  [$M] 剩余实例: $n"
+          done
