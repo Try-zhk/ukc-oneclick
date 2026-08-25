@@ -8,13 +8,7 @@ PHASE="${1:?用法: deploy.sh <prepare|build|deploy>}"
 
 NAME=$(printf '%s' "${PROJECT_NAME:-}" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9-]/-/g' -e 's/^-*//' -e 's/-*$//')
 [ -n "$NAME" ] || NAME=$(printf '%s' "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9-]/-/g')
-RAW_REGIONS="${REGIONS:-fra,sin}"
-# 下拉选了 "all - 全部地区" 时展开成全部地区；其余情况按逗号拆分，
-# 并去掉下拉自带的 " - 中文说明" 后缀，兼容 "sin - 新加坡" 与 "fra,sin" 两种输入。
-if printf '%s' "$RAW_REGIONS" | sed -e 's/ - .*//' -e 's/^ *//' -e 's/ *$//' | grep -qx 'all'; then
-  RAW_REGIONS="sin,dal,fra,sfo,was"
-fi
-REGIONS=$(printf '%s' "$RAW_REGIONS" | tr ',' '\n' | sed -e 's/ - .*//' -e 's/^ *//' -e 's/ *$//' | tr '\n' ' ')
+REGIONS=$(printf '%s' "${REGIONS:-fra,sin}" | tr ',' ' ' | sed 's/ - .*//')  # 兼容 "sin - 新加坡" 下拉格式与 "fra,sin" 旧格式
 MEMORY_MB="${MEMORY_MB:-1024}"
 APP_PORT="${APP_PORT:-3000}"
 
@@ -29,11 +23,18 @@ login() {
 case "$PHASE" in
 prepare)
   # 1) 检测语言
-  KIND=""
-  if [ -f app/package.json ] || [ -f app/index.js ]; then KIND=node; fi
-  if [ -f app/main.py ] || [ -f app/requirements.txt ]; then KIND=python; fi
-  [ -n "$KIND" ] || { echo "app/ 里没找到 index.js(Node) 或 main.py(Python)"; exit 1; }
-  echo "语言: $KIND"
+  IS_NODE=0; IS_PY=0
+  if [ -f app/package.json ] || [ -f app/index.js ]; then IS_NODE=1; fi
+  if [ -f app/main.py ] || [ -f app/app.py ] || [ -f app/index.py ] || [ -f app/requirements.txt ]; then IS_PY=1; fi
+  if [ "$IS_NODE" = 1 ] && [ "$IS_PY" = 1 ]; then
+    echo "✗ app/ 里同时有 Node 和 Python 的标志文件，请只保留一种语言的代码"; exit 1
+  fi
+  KIND=""; [ "$IS_NODE" = 1 ] && KIND=node || KIND=python
+  [ -n "$KIND" ] || { echo "app/ 里没找到代码：Node 放 index.js(+package.json)，Python 放 main.py/app.py/index.py(+可选 requirements.txt)"; exit 1; }
+  PY_ENTRY=main.py
+  if [ -f app/app.py ]; then PY_ENTRY=app.py; fi
+  if [ -f app/index.py ]; then PY_ENTRY=index.py; fi
+  echo "语言: $KIND (入口: $([ "$KIND" = node ] && echo index.js || echo "$PY_ENTRY"))"
 
   # 2) 拉基础镜像层作为 rootfs
   if [ "$KIND" = node ]; then
@@ -55,33 +56,35 @@ prepare)
   cp -a app/. _build/rootfs/app/
 
   # 5) 决定入口（index.html 存在 → 加首页前置层）
-  ENTRY=""
+  # 修复: 部分地区(dal等)的运行时处理不了 cmd 里带 && / 空格的 sh -c，会秒退 exit 0
+  #       → 一律改用 start.sh 脚本启动，cmd 只留两个干净参数
+  mkdir -p _build/rootfs/app
   if [ -f index.html ]; then
     cp index.html _build/rootfs/app/index.html
     if [ "$KIND" = node ]; then
       cp scripts/front-proxy.js _build/rootfs/app/front.js
-      ENTRY='/bin/sh|-c|cd /app && exec node front.js'
+      printf '#!/bin/sh\ncd /app\nexec node front.js\n' > _build/rootfs/app/start.sh
     else
       cp scripts/front-proxy.py _build/rootfs/app/front.py
-      ENTRY='/bin/sh|-c|cd /app && exec python3 -u front.py'
+      printf '#!/bin/sh\ncd /app\nexec python3 -u front.py\n' > _build/rootfs/app/start.sh
     fi
     echo "检测到 index.html → 已启用自定义首页"
   else
     if [ "$KIND" = node ]; then
-      ENTRY='/bin/sh|-c|cd /app && exec node index.js'
+      printf '#!/bin/sh\ncd /app\nexec node index.js\n' > _build/rootfs/app/start.sh
     else
-      ENTRY='/bin/sh|-c|cd /app && exec python3 -u main.py'
+      printf '#!/bin/sh\ncd /app\nexec python3 -u %s\n' "$PY_ENTRY" > _build/rootfs/app/start.sh
     fi
   fi
+  chmod 755 _build/rootfs/app/start.sh
 
-  CMD_JSON=$(printf '%s' "$ENTRY" | python3 -c "import json,sys;print(json.dumps(sys.stdin.read().split('|')))")
   cat > _build/Kraftfile <<EOF
 spec: v0.7
 runtime: base-compat:latest
 rootfs:
   source: ./rootfs
   format: erofs
-cmd: $CMD_JSON
+cmd: ["/bin/sh", "/app/start.sh"]
 EOF
   echo "Kraftfile 就绪"
   ;;
@@ -89,81 +92,40 @@ EOF
 build)
   login
   "$CLI" build _build --output "$ORG/$NAME:latest"
-  DIGEST=$("$CLI" images list -o json 2>/dev/null | jq -r --arg r "$ORG/$NAME" '.[]|select(.ref==$r)|.digest' | head -1)
-  [ -n "$DIGEST" ] || { echo "推送后找不到镜像 digest"; exit 1; }
-  echo "镜像: $ORG/$NAME@$DIGEST"
-  if [ -n "${GITHUB_OUTPUT:-}" ]; then
-    echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-  fi
+  # 修复: 不再捕获 digest —— images list 有最终一致性延迟，CI 拿到旧 digest
+  # 会导致 deploy 报 "No image with name"。改用 :latest 标签部署，注册表自己解析。
+  echo "镜像: $ORG/$NAME:latest"
   ;;
 
 deploy)
   login
-  FAILED=()
-  OK=()
+  # 按名字删旧实例（所有地区），实现“同名即更新”
+  "$CLI" instances delete "$NAME" --force >/dev/null 2>&1 || true
+  sleep 2
   for R in $REGIONS; do
     R=$(printf '%s' "$R" | xargs)
     [ -n "$R" ] || continue
     echo "== 地区 $R =="
-    INAME="$NAME-$R"
-
-    # 按地区清理旧实例/旧服务（必须显式带 --metro，否则只会作用于 CLI 默认地区，
-    # 导致别的地区残留旧资源、新建时因同名/配额冲突而失败）
-    "$CLI" instances delete "$INAME" --metro "$R" --force >/dev/null 2>&1 || true
-    "$CLI" services delete "$INAME" --metro "$R" >/dev/null 2>&1 || true
-    sleep 2
-
-    if ! SVC_ERR=$("$CLI" services create --name "$INAME" --metro "$R" \
-        --services "443:$APP_PORT/tls+http" --services "80:443/http+redirect" 2>&1); then
-      if printf '%s' "$SVC_ERR" | grep -qi "already exists"; then
-        echo "  [$R] service 已存在，复用（同名即更新）"
-      else
-        echo "  [$R] 创建 service 失败:"
-        echo "$SVC_ERR" | sed 's/^/    /'
-        FAILED+=("$R")
-        continue
-      fi
-    fi
-
+    "$CLI" services create --name "$NAME-$R" --metro "$R" \
+        --services "443:$APP_PORT/tls+http" --services "80:443/http+redirect" >/dev/null 2>&1 || true
     EXTRA_ENV=(-e "PORT=$APP_PORT")
+    # deploy 阶段是独立进程，KIND/PY_ENTRY 不存在，重新探测（与 prepare 的优先级一致）
+    for F in main.py app.py index.py; do
+      if [ -f "app/$F" ]; then EXTRA_ENV+=(-e "PY_ENTRY=$F"); break; fi
+    done
     if [ -f app/requirements.txt ]; then
       EXTRA_ENV+=(-e "PYTHONPATH=/app/pylibs:/app")
     fi
-    if ! RUN_ERR=$("$CLI" run --metro "$R" --name "$INAME" -m "${MEMORY_MB}M" \
-        --service "$INAME" --scale-to-zero policy=off \
-        "${EXTRA_ENV[@]}" --image "$ORG/$NAME@${DIGEST:?缺 digest}" 2>&1); then
-      echo "  [$R] 创建实例失败:"
-      echo "$RUN_ERR" | sed 's/^/    /'
-      FAILED+=("$R")
-      continue
-    fi
-    echo "  [$R] OK"
-    OK+=("$R")
+    "$CLI" run --metro "$R" --name "$NAME" -m "${MEMORY_MB}M" \
+        --service "$NAME-$R" --scale-to-zero policy=off \
+        "${EXTRA_ENV[@]}" --image "$ORG/$NAME:latest"
   done
-
   sleep 6
   echo ""
-  echo "===== 部署结果 ====="
-  for R in "${OK[@]:-}"; do
-    [ -n "$R" ] || continue
-    if LIST_JSON=$("$CLI" instances list --metro "$R" -o json 2>/dev/null); then
-      LIST_RC=0
-    else
-      LIST_RC=$?
-    fi
-    if [ "$LIST_RC" -ne 0 ] || [ -z "$LIST_JSON" ]; then
-      echo "  [$R] 部署已成功，但查询状态暂时失败（接口响应慢或状态还没同步），稍后可到 Unikraft 控制台/CLI 自行查看"
-      continue
-    fi
-    printf '%s' "$LIST_JSON" | jq -r --arg n "$NAME-$R" \
-        '.[]|select(.name==$n)|"\(.metro)\t\(.state)\thttps://\(.domains[0].fqdn // .fqdn // "?")"' 2>/dev/null |
-        while IFS=$'\t' read -r m s u; do printf '%-4s %-8s %s\n' "$m" "$s" "$u"; done || true
-  done
-  if [ "${#FAILED[@]}" -gt 0 ]; then
-    echo ""
-    echo "以下地区部署失败: ${FAILED[*]}（原因见上方日志，常见于该地区在当前账号/套餐下不可用或配额不足）"
-    exit 1
-  fi
+  echo "===== 部署完成 ====="
+  "$CLI" instances list -o json 2>/dev/null | jq -r --arg n "$NAME" \
+      '.[]|select(.name==$n)|"\(.metro)\t\(.state)\thttps://\(.domains[0].fqdn // .fqdn // "?")"' |
+      while IFS=$'\t' read -r m s u; do printf '%-4s %-8s %s\n' "$m" "$s" "$u"; done
   ;;
 
 *)

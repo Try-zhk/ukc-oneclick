@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       regions:
-        description: "选择 Unikraft 部署地区（all = 全部地区依次部署）"
+        description: "选择 Unikraft 部署地区"
         required: false
         type: choice
         default: sin - 新加坡
@@ -18,7 +18,6 @@ on:
           - fra - 德国法兰克福
           - sfo - 美国旧金山
           - was - 美国华盛顿特区
-          - all - 全部地区
       memory_mb:
         description: "内存 MB"
         required: false
@@ -54,11 +53,8 @@ jobs:
       - name: 准备 rootfs
         run: bash scripts/deploy.sh prepare
 
-      - id: build
-        name: 构建并推送镜像
+      - name: 构建并推送镜像
         run: bash scripts/deploy.sh build
 
       - name: 部署实例
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
         run: bash scripts/deploy.sh deploy

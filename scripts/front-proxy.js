@@ -12,14 +12,14 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const BACK = PORT + 10;
 const HTML = fs.readFileSync(path.join(HERE, 'index.html'));
 
-// 启动真正的应用；应用退出（崩溃/异常）就让 front 也退出，
-// 让平台感知到实例已失效并重启，而不是一直转发出 502。
-const child = spawn(process.execPath, ['index.js'], {
+// 启动真正的应用
+// stdio 必须用 'ignore'：部分应用会劫持/改写自己的 stdout，继承控制台 fd
+// 在 unikernel 环境下会把进程卡死（CPU 0%、无日志），别改回 inherit
+spawn(process.execPath, ['index.js'], {
   cwd: HERE,
   env: { ...process.env, PORT: String(BACK) },
-  stdio: 'inherit',
+  stdio: 'ignore',
 });
-child.on('exit', (code) => process.exit(code ?? 1));
 
 function proxy(req, res) {
   const p = http.request(
