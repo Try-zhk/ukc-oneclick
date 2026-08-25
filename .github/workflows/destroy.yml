@@ -57,9 +57,22 @@ jobs:
           done
 
           echo "== 删除镜像 =="
+          # 之前这里用 "$ORG/$(basename "$r")" 重新拼 ref，会把 index.sin.unikraft.cloud/atryhk/de-atry
+          # 这种完整 ref 拆坏，导致 CLI 一直报 references not found。
+          # 直接用 list 返回的完整 ref 去删，并从 ref 里的 index.<metro>.unikraft.cloud 解析出 --metro。
           unikraft images list -o json 2>/dev/null | jq -r '.[].ref' | sort -u | while read -r r; do
             [ -n "$r" ] || continue
-            echo "  删除镜像 $r"; unikraft images delete "$ORG/$(basename "$r")" || true
+            case "$r" in
+              */"$ORG"/*) : ;;
+              *) echo "  跳过非本组织镜像 $r"; continue ;;
+            esac
+            M=$(printf '%s' "$r" | sed -n 's#^index\.\([a-z0-9]*\)\..*#\1#p')
+            echo "  删除镜像 $r"
+            if [ -n "$M" ]; then
+              unikraft images delete "$r" --metro "$M" || true
+            else
+              unikraft images delete "$r" || true
+            fi
           done
 
           echo ""

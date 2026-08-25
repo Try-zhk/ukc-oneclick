@@ -115,10 +115,14 @@ deploy)
 
     if ! SVC_ERR=$("$CLI" services create --name "$INAME" --metro "$R" \
         --services "443:$APP_PORT/tls+http" --services "80:443/http+redirect" 2>&1); then
-      echo "  [$R] 创建 service 失败:"
-      echo "$SVC_ERR" | sed 's/^/    /'
-      FAILED+=("$R")
-      continue
+      if printf '%s' "$SVC_ERR" | grep -qi "already exists"; then
+        echo "  [$R] service 已存在，复用（同名即更新）"
+      else
+        echo "  [$R] 创建 service 失败:"
+        echo "$SVC_ERR" | sed 's/^/    /'
+        FAILED+=("$R")
+        continue
+      fi
     fi
 
     EXTRA_ENV=(-e "PORT=$APP_PORT")
@@ -142,9 +146,18 @@ deploy)
   echo "===== 部署结果 ====="
   for R in "${OK[@]:-}"; do
     [ -n "$R" ] || continue
-    "$CLI" instances list --metro "$R" -o json 2>/dev/null | jq -r --arg n "$NAME-$R" \
-        '.[]|select(.name==$n)|"\(.metro)\t\(.state)\thttps://\(.domains[0].fqdn // .fqdn // "?")"' |
-        while IFS=$'\t' read -r m s u; do printf '%-4s %-8s %s\n' "$m" "$s" "$u"; done
+    if LIST_JSON=$("$CLI" instances list --metro "$R" -o json 2>/dev/null); then
+      LIST_RC=0
+    else
+      LIST_RC=$?
+    fi
+    if [ "$LIST_RC" -ne 0 ] || [ -z "$LIST_JSON" ]; then
+      echo "  [$R] 部署已成功，但查询状态暂时失败（接口响应慢或状态还没同步），稍后可到 Unikraft 控制台/CLI 自行查看"
+      continue
+    fi
+    printf '%s' "$LIST_JSON" | jq -r --arg n "$NAME-$R" \
+        '.[]|select(.name==$n)|"\(.metro)\t\(.state)\thttps://\(.domains[0].fqdn // .fqdn // "?")"' 2>/dev/null |
+        while IFS=$'\t' read -r m s u; do printf '%-4s %-8s %s\n' "$m" "$s" "$u"; done || true
   done
   if [ "${#FAILED[@]}" -gt 0 ]; then
     echo ""
