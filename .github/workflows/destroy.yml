@@ -4,19 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "填 all = 清空账号下全部资源；或填项目名（如 woserwe）= 只删该项目的实例/服务/镜像"
-        required: true
+        description: "留空 = 清空账号下全部资源；填项目名（如 woserwe）= 只删该项目"
+        required: false
         type: string
-        default: all
-      confirm:
-        description: "输入 DELETE 确认执行（不可恢复！）"
-        required: true
-        type: string
+        default: ""
 
 jobs:
   destroy:
     runs-on: ubuntu-latest
-    if: inputs.confirm == 'DELETE'
     env:
       UNIKRAFT_API_TOKEN: ${{ secrets.UNIKRAFT_API_TOKEN }}
     steps:
@@ -37,7 +32,8 @@ jobs:
           ORG=$(printf '%s' "$TOKEN" | base64 -d | cut -d: -f1 | sed -e 's/^robot\$//' -e 's/\.users\.kraftcloud$//')
           printf '%s' "$TOKEN" | unikraft login --token=- --organization "$ORG" >/dev/null
 
-          if [ "$TARGET" = "all" ]; then
+          # 留空 = all（清空全部）
+          if [ -z "$TARGET" ] || [ "$TARGET" = "all" ]; then
             echo "== 清空全部资源 =="
 
             echo "-- 实例 --"
