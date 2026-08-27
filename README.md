@@ -60,9 +60,73 @@ Actions → **Destroy** → Run workflow：
 - 两种语言的标志文件别混放，脚本会报错提醒
 - 应用必须监听环境变量 `PORT` 给的端口（示例代码就是这么写的）
 
+## 跑现成的 Docker / ghcr 镜像
+
+公开镜像可以直接导入（本地或 Codespaces 跑，CI 里也能跑）：
+
+```bash
+export UNIKRAFT_API_TOKEN=<你的token>
+bash scripts/anyimage.sh ghcr.io/atryhk/railway.temp:lastly   # [实例名] 可选第二个参数
+# 构建完按提示部署：
+PROJECT_NAME=atryhk-railway-temp APP_PORT=3000 REGIONS=sin bash scripts/deploy.sh deploy
+```
+
+脚本自动：拉取镜像层做 rootfs → 读出 ENTRYPOINT/CMD/ENV/WORKDIR → 生成 `/start.sh` → 构建推送。
+私有镜像暂不支持（需要带凭据拉取）；镜像内应用监听的端口自己填 `APP_PORT`。
+
+### 已知坑：应用启动卡死、接口 404、CPU 0%
+
+症状：容器活着但某路由一直 404、CPU 为 0 —— 多半是应用启动时要下载外部二进制（如
+argo 用 `*.ssss.nyc.mn` 中转源），而这类免费中转源的权威 DNS 时好时坏，UKC 内解析失败就永远卡住。
+排查方法：部署调试实例用 `node -e 'require("dns").promises.lookup(...)'` 测域名；
+修法：往打包好的 rootfs 的 `/etc/hosts` 里钉一行该域名的 Cloudflare IP（CF anycast 大段都通），重新 build 部署即可。
+另外注意 registry 配额只有 1GiB：同名镜像反复 push 会累积旧层，403 "exceed upper limit" 就是爆了，
+删掉没实例引用的镜像再推。
+
+## 预置应用
+
+| Workflow | 说明 |
+|---|---|
+| `deploy.yml` | 部署你自己的项目（`app/` 目录，Node/Python） |
+| `komari.yml` | Komari 监控面板（官方 ghcr 镜像直装，25774 端口，512M+1G 卷） |
+| `kuma.yml` | Uptime Kuma（源码构建，3001 端口，1G 卷） |
+| `destroy.yml` | 清理资源 |
+
+## 换自定义域名
+
+两种方式，选一个：
+
+**方式 A：UKC 原生绑定（最简单）**
+1. 在你的 DNS 加 CNAME：`monitor.你的域名 → komari-sin-xxxx.sin.unikraft.app`（实例的 FQDN，控制台能看）
+2. 绑定到 service 并自动签证书：
+   ```bash
+   unikraft services edit komari-sin \
+     --domains komari-sin-xxxx.sin.unikraft.app \
+     --domains monitor.你的域名
+   ```
+   之后 `https://monitor.你的域名` 直接可用。
+
+**方式 B：Cloudflare Worker 反代（域名托管在 CF 时推荐）**
+不改 UKC 任何配置，Worker 全量转发（含 WebSocket，komari 实时数据正常）：
+
+```js
+export default {
+  async fetch(req) {
+    const url = new URL(req.url);
+    url.hostname = "komari-sin-dm44lj4d.sin.unikraft.app"; // 换成你的实例 FQDN
+    return fetch(new Request(url, req));
+  },
+};
+```
+
+Worker 绑定自定义域（Workers 路由 → 你的域名）后即可访问。优点：换后端只改一行、
+可叠加 CF 的 WAF/缓存；注意 CF 代理下 UKC 侧看到的是 CF 的 IP。
+
 ## 注意事项
 
+- 带自定义首页的部署里有个诊断端点 `/__trace`（记录应用出站请求/子进程命令）。**默认 404 关闭**；
+  仓库 Variables 里设 `TRACE_KEY` 后，用 `/__trace?key=<TRACE_KEY>` 访问
 - 实例默认**常驻运行**（不休眠归零）：休眠唤醒会重新初始化，不稳定。多地区×大内存注意配额
-- Unikraft Cloud 不是普通容器平台：只支持上述打包方式，不支持任意 Docker 镜像 / Dockerfile
+- Unikraft Cloud 不是 VPS：没有 systemd/apt/iptables/Docker-in-Docker，装服务型一键脚本的玩法不行；但"一个程序 + 监听端口"的镜像用 anyimage.sh 导入即可
 - Python 的自定义首页前置层不透传 WebSocket；需要 WS 的 Python 应用别放 `index.html`
 - token 走 GitHub Secrets，不会出现在日志和代码里；公开仓库也安全，但仍建议私有

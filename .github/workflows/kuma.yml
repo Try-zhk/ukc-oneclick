@@ -1,0 +1,35 @@
+name: Deploy Uptime Kuma
+
+on:
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: "部署地区（逗号分隔: dal,fra,sin,sfo,was）"
+        required: false
+        default: "dal"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      UNIKRAFT_API_TOKEN: ${{ secrets.UNIKRAFT_API_TOKEN }}
+      REGIONS: ${{ inputs.regions }}
+      PROJECT_NAME: kuma
+      APP_PORT: 3001
+      DATA_VOLUME: kuma-data
+      VOLUME_MB: "1024"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 unikraft CLI
+        run: |
+          VER=v0.4.2
+          curl -sL -o /tmp/u.tgz "https://github.com/unikraft-cloud/cli/releases/download/${VER}/unikraft-cli_0.4.2_linux_amd64.tar.gz"
+          tar xzf /tmp/u.tgz -C /tmp
+          sudo mv /tmp/unikraft /usr/local/bin/unikraft
+
+      - name: 构建并推送 Kuma 镜像
+        run: bash scripts/kuma.sh
+
+      - name: 部署
+        run: bash scripts/deploy.sh deploy

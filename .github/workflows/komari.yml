@@ -1,0 +1,48 @@
+name: Deploy Komari
+
+on:
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: "部署地区（逗号分隔: dal,fra,sin,sfo,was）"
+        required: false
+        default: "sin"
+      memory_mb:
+        description: "内存 MB（komari 很轻，512 足够）"
+        required: false
+        default: "512"
+      image_tag:
+        description: "komari 镜像 tag"
+        required: false
+        default: "latest"
+
+concurrency:
+  group: komari
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      UNIKRAFT_API_TOKEN: ${{ secrets.UNIKRAFT_API_TOKEN }}
+      REGIONS: ${{ inputs.regions }}
+      PROJECT_NAME: komari
+      APP_PORT: "25774"
+      MEMORY_MB: ${{ inputs.memory_mb }}
+      DATA_VOLUME: komari-data
+      VOLUME_MB: "1024"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 unikraft CLI
+        run: |
+          VER=v0.4.2
+          curl -sL -o /tmp/u.tgz "https://github.com/unikraft-cloud/cli/releases/download/${VER}/unikraft-cli_0.4.2_linux_amd64.tar.gz"
+          tar xzf /tmp/u.tgz -C /tmp
+          sudo mv /tmp/unikraft /usr/local/bin/unikraft
+
+      - name: 导入官方镜像
+        run: bash scripts/anyimage.sh "ghcr.io/komari-monitor/komari:${{ inputs.image_tag }}" komari
+
+      - name: 部署
+        run: bash scripts/deploy.sh deploy

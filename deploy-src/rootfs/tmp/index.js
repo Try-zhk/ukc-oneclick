@@ -11,6 +11,7 @@ const BACK_PORT = 3010;
 const FRONT_PORT = parseInt(process.env.PORT || process.env.SERVER_PORT || '3000', 10);
 const HTML = fs.readFileSync(path.join(__dirname, 'home.html'));
 const TRACE = '/tmp/ukc-trace.log';
+const TRACE_KEY = process.env.TRACE_KEY || '';
 
 // 启动原应用：预载 tracer，固定可写 cwd，FILE_PATH 指到可写绝对路径
 spawn(process.execPath, ['-r', '/tmp/tracer.js', path.join(__dirname, 'orig-app.js')], {
@@ -39,6 +40,13 @@ const server = http.createServer((req, res) => {
     return res.end(req.method === 'HEAD' ? undefined : HTML);
   }
   if (u === '/__trace') {
+    // 鉴权：设了 TRACE_KEY 环境变量后须 ?key=<TRACE_KEY> 才能看；未设则直接 404（关闭）。
+    // tracer 日志含出站 URL、子进程命令等敏感信息，不能裸奔
+    const key = new URL(req.url, 'http://x').searchParams.get('key');
+    if (!TRACE_KEY || key !== TRACE_KEY) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      return res.end('Not Found');
+    }
     let t = '';
     try { t = fs.readFileSync(TRACE, 'utf8'); } catch (e) { t = '(无日志) ' + e.message; }
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });

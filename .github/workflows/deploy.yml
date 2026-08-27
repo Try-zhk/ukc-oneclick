@@ -40,6 +40,7 @@ jobs:
       REGIONS: ${{ inputs.regions || vars.DEPLOY_REGIONS || 'fra,sin' }}
       MEMORY_MB: ${{ inputs.memory_mb || vars.MEMORY_MB || '1024' }}
       APP_PORT: ${{ inputs.port || vars.APP_PORT || '3000' }}
+      TRACE_KEY: ${{ vars.TRACE_KEY || '' }}
     steps:
       - uses: actions/checkout@v4
 
